@@ -1,5 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import http from "node:http";
+import crypto from "node:crypto";
 import { FeaturebaseClient } from "./client/featurebase-client.js";
 
 import { registerPostsTools } from "./tools/posts.js";
@@ -55,10 +58,68 @@ registerTeamsTools(server, client);
 registerWebhooksTools(server, client);
 registerAdminsTools(server, client);
 
+const MODE = process.env.MCP_TRANSPORT || "stdio";
+const PORT = parseInt(process.env.PORT || "3000", 10);
+const MCP_API_KEY = process.env.MCP_API_KEY || crypto.randomUUID();
+
+function authenticate(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  const auth = req.headers.authorization;
+  const url = new URL(req.url || "/", `http://localhost:${PORT}`);
+  const queryKey = url.searchParams.get("key");
+  const token = auth?.startsWith("Bearer ") ? auth.slice(7) : queryKey;
+
+  if (token !== MCP_API_KEY) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Unauthorized" }));
+    return false;
+  }
+  return true;
+}
+
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Featurebase MCP server running on stdio");
+  if (MODE === "sse") {
+    if (!process.env.MCP_API_KEY) {
+      console.error(`Generated MCP_API_KEY: ${MCP_API_KEY}`);
+      console.error("Set MCP_API_KEY env var to use a fixed key.");
+    }
+
+    let sseTransport: SSEServerTransport | null = null;
+
+    const httpServer = http.createServer(async (req, res) => {
+      const url = new URL(req.url || "/", `http://localhost:${PORT}`);
+
+      if (req.method === "GET" && url.pathname === "/health") {
+        res.writeHead(200);
+        res.end("ok");
+        return;
+      }
+
+      if (!authenticate(req, res)) return;
+
+      if (req.method === "GET" && url.pathname === "/sse") {
+        sseTransport = new SSEServerTransport("/messages", res);
+        await server.connect(sseTransport);
+      } else if (req.method === "POST" && url.pathname === "/messages") {
+        if (sseTransport) {
+          await sseTransport.handlePostMessage(req, res);
+        } else {
+          res.writeHead(400);
+          res.end("Not connected");
+        }
+      } else {
+        res.writeHead(404);
+        res.end("Not found");
+      }
+    });
+
+    httpServer.listen(PORT, () => {
+      console.error(`Featurebase MCP server running on http://localhost:${PORT}/sse`);
+    });
+  } else {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("Featurebase MCP server running on stdio");
+  }
 }
 
 main().catch((err) => {
