@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import http from "node:http";
 import crypto from "node:crypto";
 import { FeaturebaseClient } from "./client/featurebase-client.js";
@@ -77,13 +77,14 @@ function authenticate(req: http.IncomingMessage, res: http.ServerResponse): bool
 }
 
 async function main() {
-  if (MODE === "sse") {
+  if (MODE === "http") {
     if (!process.env.MCP_API_KEY) {
       console.error(`Generated MCP_API_KEY: ${MCP_API_KEY}`);
       console.error("Set MCP_API_KEY env var to use a fixed key.");
     }
 
-    let sseTransport: SSEServerTransport | null = null;
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
+    await server.connect(transport);
 
     const httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", `http://localhost:${PORT}`);
@@ -96,16 +97,8 @@ async function main() {
 
       if (!authenticate(req, res)) return;
 
-      if (req.method === "GET" && url.pathname === "/sse") {
-        sseTransport = new SSEServerTransport("/messages", res);
-        await server.connect(sseTransport);
-      } else if (req.method === "POST" && url.pathname === "/messages") {
-        if (sseTransport) {
-          await sseTransport.handlePostMessage(req, res);
-        } else {
-          res.writeHead(400);
-          res.end("Not connected");
-        }
+      if (url.pathname === "/mcp") {
+        await transport.handleRequest(req, res);
       } else {
         res.writeHead(404);
         res.end("Not found");
@@ -113,7 +106,7 @@ async function main() {
     });
 
     httpServer.listen(PORT, () => {
-      console.error(`Featurebase MCP server running on http://localhost:${PORT}/sse`);
+      console.error(`Featurebase MCP server running on http://localhost:${PORT}/mcp`);
     });
   } else {
     const transport = new StdioServerTransport();
