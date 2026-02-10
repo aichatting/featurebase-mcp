@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import http from "node:http";
 import crypto from "node:crypto";
 import { FeaturebaseClient } from "./client/featurebase-client.js";
+import { OAuthProvider } from "./auth.js";
 
 import { registerPostsTools } from "./tools/posts.js";
 import { registerPostVotersTools } from "./tools/post-voters.js";
@@ -60,44 +61,34 @@ registerAdminsTools(server, client);
 
 const MODE = process.env.MCP_TRANSPORT || "stdio";
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const MCP_API_KEY = process.env.MCP_API_KEY || crypto.randomUUID();
-
-function authenticate(req: http.IncomingMessage, res: http.ServerResponse): boolean {
-  const auth = req.headers.authorization;
-  const url = new URL(req.url || "/", `http://localhost:${PORT}`);
-  const queryKey = url.searchParams.get("key");
-  const token = auth?.startsWith("Bearer ") ? auth.slice(7) : queryKey;
-
-  if (token !== MCP_API_KEY) {
-    res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Unauthorized" }));
-    return false;
-  }
-  return true;
-}
+const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 
 async function main() {
   if (MODE === "http") {
-    if (!process.env.MCP_API_KEY) {
-      console.error(`Generated MCP_API_KEY: ${MCP_API_KEY}`);
-      console.error("Set MCP_API_KEY env var to use a fixed key.");
-    }
-
+    const oauth = new OAuthProvider(SERVER_URL);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
     await server.connect(transport);
 
     const httpServer = http.createServer(async (req, res) => {
-      const url = new URL(req.url || "/", `http://localhost:${PORT}`);
+      const url = new URL(req.url || "/", SERVER_URL);
 
+      // Health check — no auth
       if (req.method === "GET" && url.pathname === "/health") {
         res.writeHead(200);
         res.end("ok");
         return;
       }
 
-      if (!authenticate(req, res)) return;
+      // OAuth endpoints (metadata, register, authorize, token)
+      if (await oauth.handleRequest(req, res)) return;
 
+      // MCP endpoint — requires valid OAuth token
       if (url.pathname === "/mcp") {
+        if (!oauth.validateToken(req)) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Unauthorized" }));
+          return;
+        }
         await transport.handleRequest(req, res);
       } else {
         res.writeHead(404);
@@ -106,7 +97,8 @@ async function main() {
     });
 
     httpServer.listen(PORT, () => {
-      console.error(`Featurebase MCP server running on http://localhost:${PORT}/mcp`);
+      console.error(`Featurebase MCP server running on ${SERVER_URL}/mcp`);
+      console.error(`OAuth metadata at ${SERVER_URL}/.well-known/oauth-authorization-server`);
     });
   } else {
     const transport = new StdioServerTransport();
