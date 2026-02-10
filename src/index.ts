@@ -98,8 +98,52 @@ async function main() {
 
       // MCP endpoint — stateless, all requests go to the same transport
       if (url.pathname === "/mcp") {
-        console.error(`  -> MCP handler`);
-        await transport.handleRequest(req, res);
+        // Log request body for POST
+        if (req.method === "POST") {
+          const chunks: Buffer[] = [];
+          const origOn = req.on.bind(req);
+          const bodyPromise = new Promise<string>((resolve) => {
+            req.on = function (event: string, listener: (...args: unknown[]) => void) {
+              if (event === "data") {
+                const wrappedListener = (chunk: Buffer) => {
+                  chunks.push(chunk);
+                  listener(chunk);
+                };
+                return origOn(event, wrappedListener as (...args: unknown[]) => void);
+              }
+              if (event === "end") {
+                const wrappedListener = () => {
+                  resolve(Buffer.concat(chunks).toString());
+                  listener();
+                };
+                return origOn(event, wrappedListener as (...args: unknown[]) => void);
+              }
+              return origOn(event, listener);
+            } as typeof req.on;
+          });
+          // Intercept response
+          const origEnd = res.end.bind(res);
+          res.end = function (...args: unknown[]) {
+            const body = args[0];
+            console.error(`  <- Response ${res.statusCode}: ${typeof body === "string" ? body.slice(0, 500) : "[buffer/empty]"}`);
+            return (origEnd as (...a: unknown[]) => http.ServerResponse)(...args);
+          } as typeof res.end;
+
+          console.error(`  -> MCP POST`);
+          await transport.handleRequest(req, res);
+          const reqBody = await bodyPromise;
+          console.error(`  -> Body: ${reqBody.slice(0, 500)}`);
+        } else {
+          console.error(`  -> MCP ${req.method}`);
+          // Intercept response for non-POST too
+          const origEnd = res.end.bind(res);
+          res.end = function (...args: unknown[]) {
+            const body = args[0];
+            console.error(`  <- Response ${res.statusCode}: ${typeof body === "string" ? body.slice(0, 500) : "[buffer/empty]"}`);
+            return (origEnd as (...a: unknown[]) => http.ServerResponse)(...args);
+          } as typeof res.end;
+          await transport.handleRequest(req, res);
+        }
       } else {
         res.writeHead(404);
         res.end("Not found");
