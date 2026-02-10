@@ -70,7 +70,9 @@ const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 async function main() {
   if (MODE === "http") {
     const oauth = new OAuthProvider(SERVER_URL);
-    const sessions = new Map<string, StreamableHTTPServerTransport>();
+
+    // Stateful sessions (for clients that support sessions like Claude)
+    const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: McpServer }>();
 
     const httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", SERVER_URL);
@@ -100,17 +102,20 @@ async function main() {
 
       // MCP endpoint
       if (url.pathname === "/mcp") {
-        // Check for existing session
         const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
+        // Route to existing session if present
         if (sessionId && sessions.has(sessionId)) {
           console.error(`  -> routing to existing session ${sessionId}`);
-          await sessions.get(sessionId)!.handleRequest(req, res);
+          const session = sessions.get(sessionId)!;
+          await session.transport.handleRequest(req, res);
           return;
         }
 
         if (req.method === "POST") {
-          console.error(`  -> creating new session (active sessions: ${sessions.size})`);
+          // Every POST without a session creates a new stateless transport+server
+          // The transport will assign a session ID in the response for future requests
+          console.error(`  -> new POST request (active sessions: ${sessions.size})`);
 
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => crypto.randomUUID(),
@@ -124,27 +129,32 @@ async function main() {
             }
           };
 
-          const server = createServer();
-          await server.connect(transport);
+          const mcpServer = createServer();
+          await mcpServer.connect(transport);
 
+          console.error(`  -> server connected, handling request...`);
           await transport.handleRequest(req, res);
 
           if (transport.sessionId) {
-            sessions.set(transport.sessionId, transport);
-            console.error(`  -> session created: ${transport.sessionId}`);
+            sessions.set(transport.sessionId, { transport, server: mcpServer });
+            console.error(`  -> session stored: ${transport.sessionId}`);
           } else {
             console.error(`  -> WARNING: no session ID after handleRequest`);
           }
         } else if (req.method === "GET") {
+          // GET without session — return proper error
           console.error(`  -> 400 no session for GET`);
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "No session. Send a POST to /mcp first (e.g. initialize)." }));
+          res.end(JSON.stringify({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "No active session. Send an initialize POST to /mcp first." },
+            id: null,
+          }));
         } else if (req.method === "DELETE") {
-          console.error(`  -> 404 session not found for DELETE`);
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Session not found" }));
+          console.error(`  -> 404 session not found`);
+          res.writeHead(404);
+          res.end("Session not found");
         } else {
-          console.error(`  -> 405 method not allowed`);
           res.writeHead(405);
           res.end("Method not allowed");
         }
