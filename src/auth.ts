@@ -54,22 +54,27 @@ export class OAuthProvider {
     const path = url.pathname;
 
     if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") {
+      console.error(`  [oauth] metadata discovery`);
       this.handleMetadata(res);
       return true;
     }
     if (req.method === "POST" && path === "/register") {
+      console.error(`  [oauth] dynamic client registration`);
       await this.handleRegister(req, res);
       return true;
     }
     if (req.method === "GET" && path === "/authorize") {
+      console.error(`  [oauth] authorize GET (showing form)`);
       this.handleAuthorize(url, res);
       return true;
     }
     if (req.method === "POST" && path === "/authorize") {
+      console.error(`  [oauth] authorize POST (user approved)`);
       await this.handleAuthorizePost(req, res);
       return true;
     }
     if (req.method === "POST" && path === "/token") {
+      console.error(`  [oauth] token exchange`);
       await this.handleToken(req, res);
       return true;
     }
@@ -80,14 +85,22 @@ export class OAuthProvider {
   /** Validate Bearer token. Returns true if valid. */
   validateToken(req: http.IncomingMessage): boolean {
     const auth = req.headers.authorization;
-    if (!auth?.startsWith("Bearer ")) return false;
+    if (!auth?.startsWith("Bearer ")) {
+      console.error(`  [oauth] validateToken: no Bearer header`);
+      return false;
+    }
     const token = auth.slice(7);
     const record = this.tokens.get(token);
-    if (!record) return false;
+    if (!record) {
+      console.error(`  [oauth] validateToken: unknown token ${token.slice(0, 10)}...`);
+      return false;
+    }
     if (Date.now() > record.expiresAt) {
+      console.error(`  [oauth] validateToken: token expired`);
       this.tokens.delete(token);
       return false;
     }
+    console.error(`  [oauth] validateToken: valid (client=${record.clientId})`);
     return true;
   }
 

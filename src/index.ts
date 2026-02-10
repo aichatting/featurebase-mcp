@@ -74,16 +74,29 @@ async function main() {
 
     const httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", SERVER_URL);
+      const ts = new Date().toISOString();
+
+      console.error(`[${ts}] ${req.method} ${req.url}`);
+      console.error(`  Headers: ${JSON.stringify({
+        "content-type": req.headers["content-type"],
+        "accept": req.headers["accept"],
+        "authorization": req.headers["authorization"] ? "Bearer ***" : undefined,
+        "mcp-session-id": req.headers["mcp-session-id"],
+      })}`);
 
       // Health check
       if (req.method === "GET" && url.pathname === "/health") {
+        console.error(`  -> 200 health ok`);
         res.writeHead(200);
         res.end("ok");
         return;
       }
 
       // OAuth endpoints (metadata, register, authorize, token)
-      if (await oauth.handleRequest(req, res)) return;
+      if (await oauth.handleRequest(req, res)) {
+        console.error(`  -> handled by OAuth provider`);
+        return;
+      }
 
       // MCP endpoint
       if (url.pathname === "/mcp") {
@@ -91,20 +104,24 @@ async function main() {
         const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
         if (sessionId && sessions.has(sessionId)) {
-          // Existing session — route to its transport
+          console.error(`  -> routing to existing session ${sessionId}`);
           await sessions.get(sessionId)!.handleRequest(req, res);
           return;
         }
 
         if (req.method === "POST") {
-          // New session — create a fresh server + transport
+          console.error(`  -> creating new session (active sessions: ${sessions.size})`);
+
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => crypto.randomUUID(),
           });
 
           transport.onclose = () => {
             const sid = transport.sessionId;
-            if (sid) sessions.delete(sid);
+            if (sid) {
+              console.error(`  [session] closed: ${sid}`);
+              sessions.delete(sid);
+            }
           };
 
           const server = createServer();
@@ -112,22 +129,27 @@ async function main() {
 
           await transport.handleRequest(req, res);
 
-          // Store session after first request sets the ID
           if (transport.sessionId) {
             sessions.set(transport.sessionId, transport);
+            console.error(`  -> session created: ${transport.sessionId}`);
+          } else {
+            console.error(`  -> WARNING: no session ID after handleRequest`);
           }
         } else if (req.method === "GET") {
-          // SSE listener without session — need POST first
+          console.error(`  -> 400 no session for GET`);
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "No session. Send a POST to /mcp first (e.g. initialize)." }));
         } else if (req.method === "DELETE") {
+          console.error(`  -> 404 session not found for DELETE`);
           res.writeHead(404, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Session not found" }));
         } else {
+          console.error(`  -> 405 method not allowed`);
           res.writeHead(405);
           res.end("Method not allowed");
         }
       } else {
+        console.error(`  -> 404 not found`);
         res.writeHead(404);
         res.end("Not found");
       }
