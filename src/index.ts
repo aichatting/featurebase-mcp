@@ -98,8 +98,17 @@ async function main() {
 
       // MCP endpoint
       if (url.pathname === "/mcp") {
-        console.error(`  -> MCP`);
-        await transport.handleRequest(req, res);
+        try {
+          console.error(`  -> MCP`);
+          await transport.handleRequest(req, res);
+          console.error(`  <- done (${res.statusCode})`);
+        } catch (err) {
+          console.error(`  !! MCP ERROR:`, err);
+          if (!res.headersSent) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: String(err) }, id: null }));
+          }
+        }
       } else {
         res.writeHead(404);
         res.end("Not found");
