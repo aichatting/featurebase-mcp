@@ -71,17 +71,8 @@ async function main() {
   if (MODE === "http") {
     const oauth = new OAuthProvider(SERVER_URL);
 
-    // Single stateless transport — no sessions, direct JSON responses
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    transport.onerror = (err) => {
-      console.error("!! Transport error:", err);
-    };
-    const mcpServer = createServer();
-    await mcpServer.connect(transport);
-    console.error("MCP server connected with 69 tools");
+    // Session-based transport: each client gets a dedicated MCP server+transport.
+    const sessions = new Map<string, StreamableHTTPServerTransport>();
 
     const httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url || "/", SERVER_URL);
@@ -103,9 +94,56 @@ async function main() {
       // MCP endpoint
       if (url.pathname === "/mcp") {
         try {
-          console.error(`  -> MCP`);
-          await transport.handleRequest(req, res);
-          console.error(`  <- done (${res.statusCode})`);
+          const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+          // Session ID provided: it must already exist.
+          if (sessionId) {
+            const sessionTransport = sessions.get(sessionId);
+            if (!sessionTransport) {
+              res.writeHead(404);
+              res.end("Session not found");
+              return;
+            }
+            console.error(`  -> session ${sessionId}`);
+            await sessionTransport.handleRequest(req, res);
+            if (req.method === "DELETE") sessions.delete(sessionId);
+            console.error(`  <- ${res.statusCode}`);
+            return;
+          }
+
+          // Create a new session on POST when no valid session ID exists.
+          if (req.method === "POST") {
+            console.error("  -> new session");
+
+            const transport = new StreamableHTTPServerTransport({
+              sessionIdGenerator: () => crypto.randomUUID(),
+              enableJsonResponse: true,
+            });
+            transport.onerror = (err) => console.error("  !! transport error:", err);
+            transport.onclose = () => {
+              if (transport.sessionId) sessions.delete(transport.sessionId);
+            };
+
+            const mcpServer = createServer();
+            await mcpServer.connect(transport);
+            await transport.handleRequest(req, res);
+
+            if (transport.sessionId) {
+              sessions.set(transport.sessionId, transport);
+              console.error(`  <- ${res.statusCode} (session: ${transport.sessionId})`);
+            } else {
+              console.error(`  <- ${res.statusCode} (no session ID)`);
+            }
+          } else if (req.method === "GET") {
+            res.writeHead(400);
+            res.end("Missing mcp-session-id");
+          } else if (req.method === "DELETE") {
+            res.writeHead(404);
+            res.end("Session not found");
+          } else {
+            res.writeHead(405);
+            res.end("Method not allowed");
+          }
         } catch (err) {
           console.error(`  !! MCP ERROR:`, err);
           if (!res.headersSent) {
