@@ -71,10 +71,14 @@ async function main() {
   if (MODE === "http") {
     const oauth = new OAuthProvider(SERVER_URL);
 
-    // Single stateless transport — no sessions needed
+    // Single stateless transport — no sessions, direct JSON responses
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
+      enableJsonResponse: true,
     });
+    transport.onerror = (err) => {
+      console.error("!! Transport error:", err);
+    };
     const mcpServer = createServer();
     await mcpServer.connect(transport);
     console.error("MCP server connected with 69 tools");
