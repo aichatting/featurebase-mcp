@@ -26,6 +26,15 @@ pnpm run build
 
 Go to your Featurebase dashboard > **Settings** > **API** and create an API key. It will look like `sk_...`.
 
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `FEATUREBASE_API_KEY` | Yes | — | Your Featurebase API key (starts with `sk_`) |
+| `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
+| `PORT` | No | `3000` | Port for HTTP transport |
+| `SERVER_URL` | No | `http://localhost:{PORT}` | Public URL of the server (used for OAuth callbacks in HTTP mode) |
+
 ## Usage
 
 ### Stdio transport (default)
@@ -44,10 +53,14 @@ FEATUREBASE_API_KEY=sk_... pnpm run dev
 
 ### HTTP transport
 
-Set `MCP_TRANSPORT=http` to run as an HTTP server:
+Set `MCP_TRANSPORT=http` to run as an HTTP server. This mode includes a built-in OAuth 2.1 provider for authentication.
 
 ```bash
-MCP_TRANSPORT=http PORT=3000 FEATUREBASE_API_KEY=sk_... pnpm start
+MCP_TRANSPORT=http \
+  PORT=3000 \
+  SERVER_URL=https://your-domain.com \
+  FEATUREBASE_API_KEY=sk_... \
+  pnpm start
 ```
 
 ## Connecting to Claude Desktop
