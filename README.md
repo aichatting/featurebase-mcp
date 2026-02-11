@@ -63,9 +63,66 @@ MCP_TRANSPORT=http \
   pnpm start
 ```
 
-## Connecting to Claude Desktop
+## Hosting (Remote HTTP Server)
 
-Add this to your Claude Desktop config file:
+Running the server remotely lets any MCP client connect over the network without needing the code installed locally.
+
+### With Docker
+
+```bash
+docker build -t featurebase-mcp .
+
+docker run -d \
+  -p 3000:3000 \
+  -e FEATUREBASE_API_KEY=sk_... \
+  -e MCP_TRANSPORT=http \
+  -e SERVER_URL=https://your-domain.com \
+  --name featurebase-mcp \
+  featurebase-mcp
+```
+
+### With Node directly
+
+```bash
+pnpm install && pnpm run build
+
+MCP_TRANSPORT=http \
+  PORT=3000 \
+  SERVER_URL=https://your-domain.com \
+  FEATUREBASE_API_KEY=sk_... \
+  node dist/index.js
+```
+
+### Reverse proxy
+
+Put the server behind a reverse proxy (nginx, Caddy, etc.) with HTTPS. The `SERVER_URL` must match the public URL so OAuth callbacks work correctly.
+
+Example with Caddy:
+
+```
+your-domain.com {
+    reverse_proxy localhost:3000
+}
+```
+
+### Endpoints
+
+Once running, the server exposes:
+
+| Endpoint | Description |
+|----------|-------------|
+| `/mcp` | MCP protocol endpoint (POST/GET/DELETE) |
+| `/health` | Health check |
+| `/.well-known/oauth-authorization-server` | OAuth 2.1 metadata discovery |
+| `/register` | OAuth dynamic client registration |
+| `/authorize` | OAuth authorization |
+| `/token` | OAuth token exchange |
+
+## Connecting Clients
+
+### Local (stdio) — Claude Desktop
+
+Add to your Claude Desktop config:
 
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
@@ -86,15 +143,13 @@ Add this to your Claude Desktop config file:
 
 Restart Claude Desktop after saving.
 
-## Connecting to Claude Code
-
-Add the server to your Claude Code project config (`.claude/settings.json` or via the CLI):
+### Local (stdio) — Claude Code
 
 ```bash
 claude mcp add featurebase -- env FEATUREBASE_API_KEY=sk_... node /absolute/path/to/featurebase-mcp/dist/index.js
 ```
 
-Or add it manually to `.claude/settings.json`:
+Or add manually to `.claude/settings.json`:
 
 ```json
 {
@@ -105,6 +160,38 @@ Or add it manually to `.claude/settings.json`:
       "env": {
         "FEATUREBASE_API_KEY": "sk_..."
       }
+    }
+  }
+}
+```
+
+### Remote (HTTP) — Claude Desktop
+
+Point Claude Desktop at your hosted server instead of running locally:
+
+```json
+{
+  "mcpServers": {
+    "featurebase": {
+      "url": "https://your-domain.com/mcp"
+    }
+  }
+}
+```
+
+### Remote (HTTP) — Claude Code
+
+```bash
+claude mcp add featurebase --transport http https://your-domain.com/mcp
+```
+
+Or add manually to `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "featurebase": {
+      "url": "https://your-domain.com/mcp"
     }
   }
 }
